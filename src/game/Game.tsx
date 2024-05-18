@@ -1,39 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import supabase from '../supabaseClient';
 import { usePlayerId } from '../hooks';
+import CreateGame from './CreateGame';
 
-export const Game = ({ playerGameId }: { playerGameId?: string }) => {
+export const Game = () => {
   const playerId = usePlayerId();
-  const allPlayerIdsRef = useRef<string[]>();
-  const playerCountRef = useRef<number>();
-  const [loading, setLoading] = useState(!playerGameId);
-  const [gameFull, setGameFull] = useState(false);
-  const [currentGameId, setCurrentGameId] = useState(playerGameId);
+  const [loading, setLoading] = useState(true);
+  const [players, setPlayers] = useState<{max: number; total: number}>({max: 0, total: 0});
+  const [currentGameId, setCurrentGameId] = useState<string>();
+
+  const handleStartGame = useCallback((gameData: {id: string; maxPlayers: number; total?: number;}) => {
+    setCurrentGameId(gameData.id);
+    setPlayers({
+      max: gameData.maxPlayers,
+      total: gameData.total || 1
+    });
+
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    if (currentGameId) {
-      setLoading(false);
-    } else {
+    if(currentGameId) {
       supabase
         .from('Games')
         .select()
-        .eq('creator_id', playerId)
+        .eq('id', currentGameId)
         .eq('ended', false)
         .then((response) => {
-          setCurrentGameId(response.data?.[0]?.id);
-          setLoading(false);
-        });
-    }
-
-    if (playerGameId) {
-      console.log(playerGameId);
-      supabase
-        .from('Games')
-        .select()
-        .eq('id', playerGameId)
-        .eq('ended', false)
-        .then((response) => {
-          console.log(response);
           if (response.error) {
             throw new Error(response.error.message);
           }
@@ -41,37 +34,39 @@ export const Game = ({ playerGameId }: { playerGameId?: string }) => {
 
           if (!data) {
             // no data means this isn't a valid game
+            window.history.replaceState({}, '', '/');
+            setLoading(false);
             setCurrentGameId(undefined);
-          }
-
-          if (data.creator_id === playerId) {
-            // creator is trying to load player link, go back to home
-            window.history.replaceState(null, '', '/');
-          }
-
-          // check if player is currently in the game
-          if (data.player_ids && !data.player_ids.includes(playerId)) {
-            // couldn't find player, check to see if the game is full
-            if (data.player_counter >= data.player_ids.length) {
-              setGameFull(true);
-            }
+          } else {
+            handleStartGame({id: data.id, maxPlayers: data.player_count, total: (data.player_ids ?? []).length + 1});
           }
         });
     }
-  }, [currentGameId, playerId]);
+  }, [currentGameId,handleStartGame]);
 
-  const handleStartGame = useCallback(async () => {
-    const response = await supabase
-      .from('Games')
-      .insert({ creator_id: playerId, player_count: playerCountRef.current })
-      .select();
-
-    if (response.error) {
-      throw new Error(response.error.message);
+  useEffect(() => {
+    if (window.location.pathname !== '/') {
+      setCurrentGameId(window.location.pathname.replace('/', ''));
+    } else {
+      setLoading(false);
     }
+  }, [window.location.pathname]);
 
-    setCurrentGameId(response.data[0].id);
-  }, [playerId]);
+  // useEffect(() => {
+  //   if(currentGameId) {
+  //     supabase
+  //       .channel(currentGameId)
+  //       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'Games' }, payload => {
+  //         console.log('Change received!', payload)
+  //       })
+  //       .subscribe()
+
+  // }
+
+  //   return () => {
+  //     second
+  //   }
+  // }, [currentGameId])
 
   const handleEndGame = useCallback(async () => {
     const response = await supabase
@@ -84,20 +79,14 @@ export const Game = ({ playerGameId }: { playerGameId?: string }) => {
     }
 
     setCurrentGameId(undefined);
+    window.history.replaceState({}, '', '/');
   }, [currentGameId]);
 
-  const handlePlayerCountChange = useCallback(
-    (event: React.ChangeEvent<HTMLSelectElement>) => {
-      playerCountRef.current = parseInt(event.target.value, 10);
-    },
-    []
-  );
-
-  if (loading) {
+  if(loading) {
     return <div>Loading...</div>;
   }
 
-  if (gameFull) {
+  if (players.max < players.total) {
     return <div>All seats taken...</div>;
   }
 
@@ -109,24 +98,15 @@ export const Game = ({ playerGameId }: { playerGameId?: string }) => {
             Invite your friends: <br />
             <code>
               {window.location.href}
-              {currentGameId}
             </code>
           </p>
+
+          <p>Waiting on {players.max - players.total} players</p>
 
           <button onClick={handleEndGame}>End game</button>
         </div>
       ) : (
-        <div>
-          <p>
-            Player count:
-            <select onChange={handlePlayerCountChange}>
-              {[5, 6, 7, 8].map((val) => (
-                <option value={val}>{val}</option>
-              ))}
-            </select>
-          </p>
-          <button onClick={handleStartGame}>Start game</button>
-        </div>
+        <CreateGame onStartGame={handleStartGame} />
       )}
     </div>
   );
